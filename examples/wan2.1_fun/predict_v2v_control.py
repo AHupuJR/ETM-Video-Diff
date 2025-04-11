@@ -36,7 +36,9 @@ from videox_fun.utils.utils import (filter_kwargs, get_image_to_video_latent,
 # 
 # sequential_cpu_offload means that each layer of the model will be moved to the CPU after use, 
 # resulting in slower speeds but saving a large amount of GPU memory.
-GPU_memory_mode     = "sequential_cpu_offload"
+###
+# GPU_memory_mode     = "sequential_cpu_offload"
+GPU_memory_mode = 'model_full_load'
 # Multi GPUs config
 # Please ensure that the product of ulysses_degree and ring_degree equals the number of GPUs used. 
 # For example, if you are using 8 GPUs, you can set ulysses_degree = 2 and ring_degree = 4.
@@ -57,7 +59,8 @@ teacache_offload    = False
 # Config and model path
 config_path         = "config/wan2.1/wan_civitai.yaml"
 # model path
-model_name          = "models/Diffusion_Transformer/Wan2.1-Fun-1.3B-Control"
+# model_name          = "models/Diffusion_Transformer/Wan2.1-Fun-1.3B-Control"
+model_name          = "/work/lei_sun/models/Wan2.1-Fun-1.3B-Control"
 
 # Choose the sampler in "Flow"
 sampler_name        = "Flow"
@@ -70,7 +73,7 @@ lora_path           = None
 # Other params
 sample_size         = [832, 480]
 video_length        = 49
-fps                 = 16
+fps                 = 8 # 原来是16 和control video一致
 
 # Use torch.float16 if GPU does not support torch.bfloat16
 # ome graphics cards, such as v100, 2080ti, do not support torch.bfloat16
@@ -80,7 +83,7 @@ ref_image               = None
 
 # 使用更长的neg prompt如"模糊，突变，变形，失真，画面暗，文本字幕，画面固定，连环画，漫画，线稿，没有主体。"，可以增加稳定性
 # 在neg prompt中添加"安静，固定"等词语可以增加动态性。
-prompt              = "在这个阳光明媚的户外花园里，美女身穿一袭及膝的白色无袖连衣裙，裙摆在她轻盈的舞姿中轻柔地摆动，宛如一只翩翩起舞的蝴蝶。阳光透过树叶间洒下斑驳的光影，映衬出她柔和的脸庞和清澈的眼眸，显得格外优雅。仿佛每一个动作都在诉说着青春与活力，她在草地上旋转，裙摆随之飞扬，仿佛整个花园都因她的舞动而欢愉。周围五彩缤纷的花朵在微风中摇曳，玫瑰、菊花、百合，各自释放出阵阵香气，营造出一种轻松而愉快的氛围。"
+prompt              = "在杭州西湖，中国美女，阳光透过树叶间洒下斑驳的光影，映衬出她柔和的脸庞和清澈的眼眸，显得格外优雅。仿佛每一个动作都在诉说着青春与活力，周围有很多游客，都看着她"
 negative_prompt     = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
 # Using longer neg prompt such as "Blurring, mutation, deformation, distortion, dark and solid, comics, text subtitles, line art." can increase stability
@@ -95,6 +98,12 @@ save_path               = "samples/wan-videos-fun-control"
 
 device = set_multi_gpus_devices(ulysses_degree, ring_degree)
 config = OmegaConf.load(config_path)
+
+if os.path.exists(control_video):
+    print(f"File exists: {control_video}")
+else:
+    print(f"File not found: {control_video}")
+
 
 transformer = WanTransformer3DModel.from_pretrained(
     os.path.join(model_name, config['transformer_additional_kwargs'].get('transformer_subpath', 'transformer')),

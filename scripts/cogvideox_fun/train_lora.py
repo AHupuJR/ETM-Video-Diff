@@ -71,7 +71,10 @@ from videox_fun.models import (AutoencoderKLCogVideoX,
 from videox_fun.pipeline import (CogVideoXFunPipeline,
                                 CogVideoXFunControlPipeline,
                                 CogVideoXFunInpaintPipeline)
-from videox_fun.pipeline.pipeline_CogVideoXFuninpaint import (
+# from videox_fun.pipeline.pipeline_CogVideoXFuninpaint import (
+#     add_noise_to_reference_video, get_3d_rotary_pos_embed,
+#     get_resize_crop_region_for_grid)
+from videox_fun.pipeline.pipeline_cogvideox_fun_inpaint import (
     add_noise_to_reference_video, get_3d_rotary_pos_embed,
     get_resize_crop_region_for_grid)
 from videox_fun.utils.discrete_sampler import DiscreteSampling

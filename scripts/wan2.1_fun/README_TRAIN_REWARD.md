@@ -201,6 +201,11 @@ Set `lora_path` and `lora_weight`  in [examples/wan2.1_fun/predict_t2v.py](https
    evaluate preferences along the temporal dimension (such as dynamism and consistency). Further more, We find using image preference models leads to a decrease 
    in the dynamism of generated videos. Although this can be mitigated by computing the reward using only the first frame of the decoded video, the impact still persists.
 
+1.	我们观察到在训练到一定程度后，奖励仍在持续上升，但生成视频的质量并未进一步提升。
+模型巧妙地学习到了一些捷径（例如在背景中添加伪影，即对抗性补丁）来提高奖励值。
+2.	目前，视频生成仍缺乏合适的偏好模型。直接使用图像偏好模型无法评估时间维度上的偏好（如动态性与一致性）。
+此外，我们发现使用图像偏好模型会导致生成视频的动态性下降。尽管可以通过仅使用解码视频的首帧来计算奖励以减轻这一影响，但该问题依然存在。
+
 ## Reference
 <ol>
   <li id="ref1">Clark, Kevin, et al. "Directly fine-tuning diffusion models on differentiable rewards.". In ICLR 2024.</li>

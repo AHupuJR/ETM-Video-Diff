@@ -789,6 +789,7 @@ def main():
         rng = None
         torch_rng = None
     index_rng = np.random.default_rng(np.random.PCG64(43))
+    # import pdb; pdb.set_trace()
     print(f"Init rng with seed {args.seed + accelerator.process_index}. Process_index is {accelerator.process_index}")
 
     # Handle the repository creation
@@ -1196,7 +1197,7 @@ def main():
             persistent_workers=True if args.dataloader_num_workers != 0 else False,
             num_workers=args.dataloader_num_workers,
         )
-    else:
+    else: # No Bucket training
         # DataLoaders creation:
         batch_sampler_generator = torch.Generator().manual_seed(args.seed)
         batch_sampler = ImageVideoSampler(RandomSampler(train_dataset, generator=batch_sampler_generator), train_dataset, args.train_batch_size)
@@ -1338,6 +1339,9 @@ def main():
             if epoch == first_epoch and step == 0:
                 pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
                 pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
+                # print(f'DEBUG: out of dataloader: pixel_values shape:{pixel_values.shape}')
+                # sample.shape: [1, 3, 1, 912, 704] b, c, f, h, w
+
                 os.makedirs(os.path.join(args.output_dir, "sanity_check"), exist_ok=True)
                 for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
                     pixel_value = pixel_value[None, ...]
@@ -1473,12 +1477,17 @@ def main():
                             pixel_values_bs = pixel_values_bs.sample()
                             new_pixel_values.append(pixel_values_bs)
                         return torch.cat(new_pixel_values, dim = 0)
+                    
+                    # print(f'DEBUG: before latent, pixel_values.shape:{pixel_values.shape}')
+                    # ([1, 1, 3, 1024, 1024])
                     if vae_stream_1 is not None:
                         vae_stream_1.wait_stream(torch.cuda.current_stream())
                         with torch.cuda.stream(vae_stream_1):
                             latents = _batch_encode_vae(pixel_values)
                     else:
                         latents = _batch_encode_vae(pixel_values)
+                    print(f'DEBUG: latents.shape:{latents.shape}')
+                    # ([1, 16, 1, 128, 128])
 
                     if args.train_mode != "normal":
                         mask = rearrange(mask, "b f c h w -> b c f h w")
@@ -1550,6 +1559,8 @@ def main():
                     torch.cuda.empty_cache()
 
                 bsz, channel, num_frames, height, width = latents.size()
+                # ([1, 16, 1, 128, 128])
+
                 noise = torch.randn(latents.size(), device=latents.device, generator=torch_rng, dtype=weight_dtype)
 
                 if not args.uniform_sampling:
@@ -1595,6 +1606,13 @@ def main():
                     target_shape[1]
                 )
                 # Predict the noise residual
+                print(f'DEBUG: before transformer3d: noisy_latents.shape:{noisy_latents.shape}') # ([1, 16, 1, 128, 128]) b, c, f, h, w 
+
+                # print(f'DEBUG: before transformer3d: prompt_embeds.shape:{prompt_embeds.shape}')
+                # print(f'DEBUG: before transformer3d: seq_len.shape:{seq_len.shape}')
+                # print(f'DEBUG: before transformer3d: inpaint_latents.shape:{inpaint_latents.shape}')
+                # print(f'DEBUG: before transformer3d: clip_context.shape:{clip_context.shape}')
+
                 with torch.cuda.amp.autocast(dtype=weight_dtype):
                     noise_pred = transformer3d(
                         x=noisy_latents,

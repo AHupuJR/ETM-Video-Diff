@@ -671,6 +671,26 @@ def parse_args():
         default=1.29,
         help="Scale of mode weighting scheme. Only effective when using the `'mode'` as the `weighting_scheme`.",
     )
+    
+    ### added by Lei
+    parser.add_argument(
+        "--enable_inpaint",
+        action="store_true", 
+        help="enable inpaint for training.",
+    )
+    parser.add_argument(
+        "--inpaint_image_start_only",
+        action="store_true", 
+        help="Only the first frame are not masked",
+    )
+
+
+
+
+
+
+
+
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1038,7 +1058,7 @@ def main():
         video_sample_size=args.video_sample_size, video_sample_stride=args.video_sample_stride, video_sample_n_frames=args.video_sample_n_frames, 
         video_repeat=args.video_repeat, 
         image_sample_size=args.image_sample_size,
-        enable_bucket=args.enable_bucket, enable_inpaint=False,
+        enable_bucket=args.enable_bucket, enable_inpaint=args.enable_inpaint,inpaint_image_start_only = args.inpaint_image_start_only
     )
     
     if args.enable_bucket:
@@ -1385,8 +1405,7 @@ def main():
                     gif_name = '-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_step}-{idx}'
                     save_videos_grid(pixel_value, f"{args.output_dir}/sanity_check/{gif_name[:10]}.gif", rescale=True)
                     save_videos_grid(control_pixel_value, f"{args.output_dir}/sanity_check/{gif_name[:10]}_control.gif", rescale=True)
-                
-                if args.train_mode != "control":
+                if args.train_mode != "control": # control mode 没有ref_image
                     ref_pixel_values = batch["ref_pixel_values"].cpu()
                     ref_pixel_values = rearrange(ref_pixel_values, "b f c h w -> b c f h w")
                     for idx, (ref_pixel_value, text) in enumerate(zip(ref_pixel_values, texts)):

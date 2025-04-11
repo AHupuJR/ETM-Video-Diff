@@ -14,7 +14,7 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_lora.py \
   --video_sample_size=256 \
   --token_sample_size=512 \
   --video_sample_stride=2 \
-  --video_sample_n_frames=81 # 训练的video的frame数量，图片的话设置为1 \
+  --video_sample_n_frames=1 \
   --train_batch_size=1 \
   --video_repeat=1 \
   --gradient_accumulation_steps=1 \
@@ -32,10 +32,17 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_lora.py \
   --max_grad_norm=0.05 \
   --random_hw_adapt \
   --training_with_video_token_length \
-  --enable_bucket \
   --uniform_sampling \
-  --train_mode="inpaint" \
-  --low_vram 
+  --train_mode="inpaint" 
+  # --enable_bucket \
+
+  # --low_vram # 开启后降低显存需求
+
+###### 参数解释
+# --video_sample_n_frames: 训练的video的frame数量，图片的话设置为1 
+# --low_vram: 开启后降低显存需求
+
+
 
 # # Training command for T2V
 # export MODEL_NAME="models/Diffusion_Transformer/Wan2.1-Fun-14B-InP"

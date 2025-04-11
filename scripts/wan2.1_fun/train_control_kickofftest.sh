@@ -1,6 +1,6 @@
-export MODEL_NAME="models/Diffusion_Transformer/Wan2.1-Fun-1.3B-Control"
-export DATASET_NAME="datasets/internal_datasets/" # TODO
-export DATASET_META_NAME="datasets/internal_datasets/metadata.json" # TODO
+export MODEL_NAME="/work/lei_sun/models/Wan2.1-Fun-1.3B-Control"
+export DATASET_NAME="./datasets/toy_dataset_control/" # TODO
+export DATASET_META_NAME="./datasets/toy_dataset_control/json_of_toy_dataset_control.json" # TODO
 export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
 NCCL_DEBUG=INFO
@@ -35,19 +35,18 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --max_grad_norm=0.05 \
   --random_hw_adapt \
   --training_with_video_token_length \
-  --enable_bucket \
   --uniform_sampling \
   --low_vram \
   --train_mode="control_object" \
-  --control_ref_image="first_frame" \
-  --trainable_modules "."
+  --trainable_modules "."\
+  --enable_inpaint \
+  --inpaint_image_start_only
 
 
 
-
-### Questions #####
-# vae_mini_batch == train_batch_size?
-# 是否要使用scale_lr
+### ommited #####
+  # --enable_bucket \
+  # --control_ref_image="first_frame" \
 
 
 

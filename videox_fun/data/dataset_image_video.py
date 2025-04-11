@@ -253,7 +253,7 @@ class ImageVideoDataset(Dataset):
 
     def get_batch(self, idx):
         data_info = self.dataset[idx % len(self.dataset)]
-        
+        # import pdb; pdb.set_trace()
         if data_info.get('type', 'image')=='video':
             video_id, text = data_info['file_path'], data_info['text']
 
@@ -316,6 +316,8 @@ class ImageVideoDataset(Dataset):
                 image = np.expand_dims(np.array(image), 0)
             if random.random() < self.text_drop_ratio:
                 text = ''
+            # print(f'DEBUG: get batch: image shape:{image.shape}')
+            # (1, 832, 624, 3) b, H, W, c
             return image, text, 'image'
 
     def __len__(self):
@@ -349,16 +351,20 @@ class ImageVideoDataset(Dataset):
             mask_pixel_values = pixel_values * (1 - mask) + torch.ones_like(pixel_values) * -1 * mask
             sample["mask_pixel_values"] = mask_pixel_values
             sample["mask"] = mask
+            ## mask_pixel_values 是通过将原始图像（pixel_values）与遮罩结合来得到的。如果遮罩的某个位置为 1，则该位置的像素值被设置为 -1，否则保持原始值。
+
 
             clip_pixel_values = sample["pixel_values"][0].permute(1, 2, 0).contiguous()
             clip_pixel_values = (clip_pixel_values * 0.5 + 0.5) * 255
             sample["clip_pixel_values"] = clip_pixel_values
+            # 首先将像素值从 [-1, 1] 范围转换到 [0, 1] 范围，再乘以 255，将像素值映射到 [0, 255] 范围
 
             ref_pixel_values = sample["pixel_values"][0].unsqueeze(0)
             if (mask == 1).all():
                 ref_pixel_values = torch.ones_like(ref_pixel_values) * -1
             sample["ref_pixel_values"] = ref_pixel_values
-
+            # 如果遮罩 mask 中所有值都是 1（表示所有像素都被遮挡），则将 ref_pixel_values 设置为全为 -1 的张量。
+            
         return sample
 
 
@@ -374,6 +380,7 @@ class ImageVideoControlDataset(Dataset):
             video_length_drop_start=0.0, 
             video_length_drop_end=1.0,
             enable_inpaint=False,
+            inpaint_image_start_only = False,
     ):
         # Loading annotations from files
         print(f"loading annotations from {ann_path} ...")
@@ -403,6 +410,7 @@ class ImageVideoControlDataset(Dataset):
         self.enable_bucket = enable_bucket
         self.text_drop_ratio = text_drop_ratio
         self.enable_inpaint  = enable_inpaint
+        self.image_start_only = inpaint_image_start_only
 
         self.video_length_drop_start = video_length_drop_start
         self.video_length_drop_end = video_length_drop_end
@@ -572,7 +580,7 @@ class ImageVideoControlDataset(Dataset):
                 idx = random.randint(0, self.length-1)
 
         if self.enable_inpaint and not self.enable_bucket:
-            mask = get_random_mask(pixel_values.size())
+            mask = get_random_mask(pixel_values.size(), image_start_only=self.image_start_only)
             mask_pixel_values = pixel_values * (1 - mask) + torch.ones_like(pixel_values) * -1 * mask
             sample["mask_pixel_values"] = mask_pixel_values
             sample["mask"] = mask

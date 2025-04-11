@@ -727,6 +727,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
+        # import pdb; pdb.set_trace()
         if self.model_type == 'i2v':
             assert clip_fea is not None and y is not None
         # params
