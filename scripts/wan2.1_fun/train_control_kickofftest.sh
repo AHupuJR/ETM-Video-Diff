@@ -40,7 +40,7 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --trainable_modules "."\
   --enable_inpaint \
   --inpaint_image_start_only \
-  # --fixed_prompt='./fixed_prompt/fixed_high_quality_prompt.pt' \
+  --fixed_prompt='./fixed_prompt/fixed_high_quality_prompt.pt' \
 
 ## ref_pixel_values作为第一帧参考frame
 ## --inpaint_image_start_only控制mask设定为第一帧保留其他mask掉，但是实际没有使用

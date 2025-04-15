@@ -684,7 +684,7 @@ def parse_args():
         help="Only the first frame are not masked",
     )
     parser.add_argument(
-        "--fixed_prompt_file",
+        "--fixed_prompt",
         type=str,
         default=None, # './fixed_prompt/fixed_high_quality_prompt.pt'
         help="Path to the fixed promt for training",
@@ -793,11 +793,12 @@ def main():
     noise_scheduler = FlowMatchEulerDiscreteScheduler(
         **filter_kwargs(FlowMatchEulerDiscreteScheduler, OmegaConf.to_container(config['scheduler_kwargs']))
     )
-
-    # Get Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        os.path.join(args.pretrained_model_name_or_path, config['text_encoder_kwargs'].get('tokenizer_subpath', 'tokenizer')),
-    )
+    if not args.fixed_prompt:
+        # Get Tokenizer
+        # 如果是固定的prompt就不需要这个
+        tokenizer = AutoTokenizer.from_pretrained(
+            os.path.join(args.pretrained_model_name_or_path, config['text_encoder_kwargs'].get('tokenizer_subpath', 'tokenizer')),
+        )
 
     def deepspeed_zero_init_disabled_context_manager():
         """
@@ -1605,7 +1606,7 @@ def main():
                 if args.enable_text_encoder_in_dataloader:
                     prompt_embeds = batch['encoder_hidden_states'].to(device=latents.device)
                 else:
-                    if args.fixed_prompt_file == None:
+                    if args.fixed_prompt == None:
 
                         ### 文本处理
                         ## max_length 是 tokenizer 输出的 token 序列的最大长度
@@ -1624,18 +1625,17 @@ def main():
                             # prompt_ids.attention_mask.shape == (B, max_length)
                             text_input_ids = prompt_ids.input_ids
                             prompt_attention_mask = prompt_ids.attention_mask # 1 表示有效 token，0 表示 padding
-                            import pdb; pdb.set_trace()
                             seq_lens = prompt_attention_mask.gt(0).sum(dim=1).long() #seq_lens[i] 表示第 i 个样本的真实 token 长度（不包括 padding）
                             prompt_embeds = text_encoder(text_input_ids.to(latents.device), attention_mask=prompt_attention_mask.to(latents.device))[0]
                             prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
-                            # text_encoder(...) 得到 shape 为 [B, max_length, D] 的嵌入向量
                             # 用 seq_lens 只保留每个样本真实的有效 token 嵌入（按长度 v 截断）
                             #### save token 
                             # torch.save(prompt_embeds[0].cpu(), "./fixed_prompt/fixed_high_quality_prompt.pt")
                             # print(f'Saved ./fixed_prompt/fixed_high_quality_prompt.pt')
-                    # else: # 使用固定prompt
-                        # prompt_embed = torch.load(args.fixed_prompt)# shape: [Lᵢ, D]
-                        # prompt_embeds = [prompt_embed.to(latents.device) for i in range(B)]
+                    else: # 使用固定prompt
+                        prompt_embed = torch.load(args.fixed_prompt)# shape: [Lᵢ, D]
+                        batchsize = latents.shape[0]
+                        prompt_embeds = [prompt_embed.to(latents.device) for i in range(batchsize)]
 
 
                 if args.low_vram and not args.enable_text_encoder_in_dataloader:
