@@ -683,8 +683,12 @@ def parse_args():
         action="store_true", 
         help="Only the first frame are not masked",
     )
-
-
+    parser.add_argument(
+        "--fixed_prompt_file",
+        type=str,
+        default=None, # './fixed_prompt/fixed_high_quality_prompt.pt'
+        help="Path to the fixed promt for training",
+    )
 
 
 
@@ -1203,7 +1207,7 @@ def main():
                 )
                 if batch_video_length == 0:
                     batch_video_length = 1
-
+                
                 if args.train_mode != "control":
                     if args.control_ref_image == "first_frame":
                         clip_index = 0
@@ -1405,6 +1409,7 @@ def main():
                     gif_name = '-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_step}-{idx}'
                     save_videos_grid(pixel_value, f"{args.output_dir}/sanity_check/{gif_name[:10]}.gif", rescale=True)
                     save_videos_grid(control_pixel_value, f"{args.output_dir}/sanity_check/{gif_name[:10]}_control.gif", rescale=True)
+                    
                 if args.train_mode != "control": # control mode 没有ref_image
                     ref_pixel_values = batch["ref_pixel_values"].cpu()
                     ref_pixel_values = rearrange(ref_pixel_values, "b f c h w -> b c f h w")
@@ -1412,7 +1417,10 @@ def main():
                         ref_pixel_value = ref_pixel_value[None, ...]
                         gif_name = '-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_step}-{idx}'
                         save_videos_grid(ref_pixel_value, f"{args.output_dir}/sanity_check/{gif_name[:10]}_ref.gif", rescale=True)
+                # data:
+                # pixel_value, control_pixel_value, ref_pixel_values (train_mode != "control")
 
+            ###### 输入网络
             with accelerator.accumulate(transformer3d):
                 # Convert images to latent space
                 pixel_values = batch["pixel_values"].to(weight_dtype)
@@ -1449,6 +1457,7 @@ def main():
                             clip_pixel_values = torch.tile(clip_pixel_values, (2, 1, 1, 1))
                             ref_pixel_values = torch.tile(ref_pixel_values, (2, 1, 1, 1, 1))
 
+                # 以非均匀的概率采样视频帧数（偏好更长的帧数），并裁剪前几帧用于训练，确保输出满足特定结构要求（如 4n+1）。
                 if args.random_frame_crop:
                     def _create_special_list(length):
                         if length == 1:
@@ -1508,8 +1517,12 @@ def main():
                         text_encoder.to("cpu")
 
                 with torch.no_grad():
+                    ## VAE encode
                     # This way is quicker when batch grows up
                     def _batch_encode_vae(pixel_values):
+                        '''
+                        _batch_encode_vae 是对视频图像进行 VAE 编码的辅助函数，支持将大 batch 拆成多个小 batch 分段送入 VAE, 从而节省显存, 避免 OOM
+                        '''
                         pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
                         bs = args.vae_mini_batch
                         new_pixel_values = []
@@ -1525,9 +1538,11 @@ def main():
                             latents = _batch_encode_vae(pixel_values)
                     else:
                         latents = _batch_encode_vae(pixel_values)
+                    ## video被vae encode成latents了
 
                     control_latents = _batch_encode_vae(control_pixel_values)
                     # Make control latents to zero
+                    # 这段代码的作用是：以 10% 的概率将 control_latents 中某个样本batch置零（清空），从而实现一定的训练 regularization（正则化），或用于测试模型在缺失控制输入情况下的鲁棒性。
                     for bs_index in range(control_latents.size()[0]):
                         if rng is None:
                             zero_init_control_latents_conv_in = np.random.choice([0, 1], p = [0.90, 0.10])
@@ -1539,9 +1554,12 @@ def main():
                             
                     if args.train_mode != "control":
                         ref_latents = _batch_encode_vae(ref_pixel_values)
-
+                        # ref_latents是视频第一帧，被vae encode
                         ref_latents_conv_in = torch.zeros_like(latents).to(ref_latents.device, ref_latents.dtype)
                         ref_latents_conv_in[:, :, :1] = ref_latents
+                        # ref_latents_conv_in的shape和latent一致，bcfhw, 把参考帧 latent 放入其f维度第 0 帧（即前面一帧），用于模拟参考帧输入
+
+                        #随机置零参考帧 latent（10% 概率）
                         for bs_index in range(ref_latents.size()[0]):
                             if rng is None:
                                 zero_init_ref_latents_conv_in = np.random.choice([0, 1], p = [0.90, 0.10])
@@ -1551,14 +1569,19 @@ def main():
                             if zero_init_ref_latents_conv_in and control_latents.size()[1] != 1:
                                 ref_latents_conv_in[bs_index, :, :1] = ref_latents_conv_in[bs_index, :, :1] * 0
 
+                        # 拼接 control_latents 和 ref_latents_conv_in, shape: bcfhw, c维度cat
+                        # control_latents: b, 2c, 1+t/4, h/8, w/8
                         control_latents = torch.cat([control_latents, ref_latents_conv_in], dim = 1)
 
+                        # 把第一帧转化为语义特征
+                        # clip_pixel_value本质上就是ref_pixel_value,也就是第一帧
+                        # clip_pixel_value转化为语义特征 clip_context
                         clip_context = []
                         for clip_pixel_value in clip_pixel_values:
                             clip_image = Image.fromarray(np.uint8(clip_pixel_value.float().cpu().numpy()))
                             clip_image = TF.to_tensor(clip_image).sub_(0.5).div_(0.5).to(clip_image_encoder.device, weight_dtype)
                             _clip_context = clip_image_encoder([clip_image[:, None, :, :]])
-
+                            # 10% 概率将 CLIP 编码置为 0（随机屏蔽条件）
                             if rng is None:
                                 zero_init_clip_in = np.random.choice([True, False], p=[0.1, 0.9])
                             else:
@@ -1582,30 +1605,54 @@ def main():
                 if args.enable_text_encoder_in_dataloader:
                     prompt_embeds = batch['encoder_hidden_states'].to(device=latents.device)
                 else:
-                    with torch.no_grad():
-                        prompt_ids = tokenizer(
-                            batch['text'], 
-                            padding="max_length", 
-                            max_length=args.tokenizer_max_length, 
-                            truncation=True, 
-                            add_special_tokens=True, 
-                            return_tensors="pt"
-                        )
-                        text_input_ids = prompt_ids.input_ids
-                        prompt_attention_mask = prompt_ids.attention_mask
+                    if args.fixed_prompt_file == None:
 
-                        seq_lens = prompt_attention_mask.gt(0).sum(dim=1).long()
-                        prompt_embeds = text_encoder(text_input_ids.to(latents.device), attention_mask=prompt_attention_mask.to(latents.device))[0]
-                        prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
+                        ### 文本处理
+                        ## max_length 是 tokenizer 输出的 token 序列的最大长度
+                        ## 对过长文本：截断（truncation=True）
+                        ## 对短文本：填充（padding='max_length'）
+                        with torch.no_grad():
+                            prompt_ids = tokenizer(
+                                batch['text'],
+                                padding="max_length", 
+                                max_length=args.tokenizer_max_length, 
+                                truncation=True, 
+                                add_special_tokens=True, 
+                                return_tensors="pt"
+                            )
+                            # prompt_ids.input_ids.shape == (B, max_length)
+                            # prompt_ids.attention_mask.shape == (B, max_length)
+                            text_input_ids = prompt_ids.input_ids
+                            prompt_attention_mask = prompt_ids.attention_mask # 1 表示有效 token，0 表示 padding
+                            import pdb; pdb.set_trace()
+                            seq_lens = prompt_attention_mask.gt(0).sum(dim=1).long() #seq_lens[i] 表示第 i 个样本的真实 token 长度（不包括 padding）
+                            prompt_embeds = text_encoder(text_input_ids.to(latents.device), attention_mask=prompt_attention_mask.to(latents.device))[0]
+                            prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
+                            # text_encoder(...) 得到 shape 为 [B, max_length, D] 的嵌入向量
+                            # 用 seq_lens 只保留每个样本真实的有效 token 嵌入（按长度 v 截断）
+                            #### save token 
+                            # torch.save(prompt_embeds[0].cpu(), "./fixed_prompt/fixed_high_quality_prompt.pt")
+                            # print(f'Saved ./fixed_prompt/fixed_high_quality_prompt.pt')
+                    # else: # 使用固定prompt
+                        # prompt_embed = torch.load(args.fixed_prompt)# shape: [Lᵢ, D]
+                        # prompt_embeds = [prompt_embed.to(latents.device) for i in range(B)]
+
 
                 if args.low_vram and not args.enable_text_encoder_in_dataloader:
                     text_encoder.to('cpu')
                     torch.cuda.empty_cache()
 
+                ## 已有的输入：
+                # latents: b,c,f,h,w
+                # control_latents (包含control和ref): b,2c,f,h,w
+                # prompt_embeds [B, max_length, D]
+
                 bsz, channel, num_frames, height, width = latents.size()
                 noise = torch.randn(latents.size(), device=latents.device, generator=torch_rng, dtype=weight_dtype)
 
-                if not args.uniform_sampling:
+                ##### Diffusion denoising training #####
+                # 为每个样本随机选择一个扩散时间步 t
+                if not args.uniform_sampling: # 使用特定的概率密度函数（可能是 log-normal）来采样，偏向某些时间点
                     u = compute_density_for_timestep_sampling(
                         weighting_scheme=args.weighting_scheme,
                         batch_size=bsz,
@@ -1615,44 +1662,56 @@ def main():
                     )
                     indices = (u * noise_scheduler.config.num_train_timesteps).long()
                 else:
+                    # 等概率地随机采样时间步
                     # Sample a random timestep for each image
                     # timesteps = generate_timestep_with_lognorm(0, args.train_sampling_steps, (bsz,), device=latents.device, generator=torch_rng)
                     # timesteps = torch.randint(0, args.train_sampling_steps, (bsz,), device=latents.device, generator=torch_rng)
                     indices = idx_sampling(bsz, generator=torch_rng, device=latents.device)
                     indices = indices.long().cpu()
+
+                # 最终 timesteps 是一个形如 (B,) 的 tensor，表示当前批次样本各自的时间步
                 timesteps = noise_scheduler.timesteps[indices].to(device=latents.device)
 
                 def get_sigmas(timesteps, n_dim=4, dtype=torch.float32):
-                    sigmas = noise_scheduler.sigmas.to(device=accelerator.device, dtype=dtype)
+                    '''
+                    根据 t 获取噪声幅度 sigmas
+                    '''
+                    sigmas = noise_scheduler.sigmas.to(device=accelerator.device, dtype=dtype) # sigmas 是每个时间步对应的噪声幅度（Diffusion 中的方差控制项）
                     schedule_timesteps = noise_scheduler.timesteps.to(accelerator.device)
                     timesteps = timesteps.to(accelerator.device)
                     step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
 
                     sigma = sigmas[step_indices].flatten()
                     while len(sigma.shape) < n_dim:
-                        sigma = sigma.unsqueeze(-1)
+                        sigma = sigma.unsqueeze(-1) # 扩展为与 latents 同维度的形状，例如 (B, 1, 1, 1, 1)
                     return sigma
 
                 # Add noise according to flow matching.
                 # zt = (1 - texp) * x + texp * z1
-                sigmas = get_sigmas(timesteps, n_dim=latents.ndim, dtype=latents.dtype)
+                sigmas = get_sigmas(timesteps, n_dim=latents.ndim, dtype=latents.dtype) # sigmas 是每个时间步对应的噪声幅度（Diffusion 中的方差控制项texp）
                 noisy_latents = (1.0 - sigmas) * latents + sigmas * noise
+                # sigmas -> 0, noisy_latents -> latents
+                # sigmas -> 1, noisy_latents -> noise
+                # sigmas:        0->1
+                # noisy_latents: latents -> noise
+                # 从图像到noise的过程
 
                 # Add noise
                 target = noise - latents
-                
+                # 目标向量场， 从 latents -> noise
+
                 target_shape = (vae.latent_channels, num_frames, width, height)
                 seq_len = math.ceil(
                     (target_shape[2] * target_shape[3]) /
                     (accelerator.unwrap_model(transformer3d).config.patch_size[1] * accelerator.unwrap_model(transformer3d).config.patch_size[2]) *
                     target_shape[1]
-                )
+                ) #  patch 数乘时间帧数 就是seq_len
 
                 # Predict the noise residual
                 with torch.cuda.amp.autocast(dtype=weight_dtype):
                     noise_pred = transformer3d(
                         x=noisy_latents,
-                        context=prompt_embeds,
+                        context=prompt_embeds, # text prompt
                         t=timesteps,
                         seq_len=seq_len,
                         y=control_latents if args.train_mode != "normal" else None,
@@ -1660,6 +1719,9 @@ def main():
                     )
                 
                 def custom_mse_loss(noise_pred, target, weighting=None, threshold=50):
+                    '''
+                    对异常误差值进行屏蔽（大于 threshold 的差值不会对损失有贡献）
+                    '''
                     noise_pred = noise_pred.float()
                     target = target.float()
                     diff = noise_pred - target
@@ -1675,6 +1737,7 @@ def main():
                 loss = custom_mse_loss(noise_pred.float(), target.float(), weighting.float())
                 loss = loss.mean()
 
+                # 运动差分子损失（Motion Sub Loss），捕捉时间或空间序列中帧与帧之间的“运动信息”，类似光流的概念；把最终损失作为主损失和“运动损失”的加权平均
                 if args.motion_sub_loss and noise_pred.size()[1] > 2:
                     gt_sub_noise = noise_pred[:, 1:, :].float() - noise_pred[:, :-1, :].float()
                     pre_sub_noise = target[:, 1:, :].float() - target[:, :-1, :].float()
@@ -1685,9 +1748,10 @@ def main():
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
-                # Backpropagate
+                # Backpropagate 反向传播
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
+                    # 梯度裁剪
                     if not args.use_deepspeed:
                         trainable_params_grads = [p.grad for p in trainable_params if p.grad is not None]
                         trainable_params_total_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2) for g in trainable_params_grads]), 2)
@@ -1714,6 +1778,12 @@ def main():
                 optimizer.zero_grad()
 
             # Checks if the accelerator has performed an optimization step behind the scenes
+            # 这段代码是训练循环的后半部分，重点在于：
+            # 同步训练步骤的处理
+            # EMA（指数移动平均）模型更新
+            # Checkpoint 保存逻辑（带上限控制）
+            # 训练过程中的验证
+            # 训练完成后的收尾保存
             if accelerator.sync_gradients:
 
                 if args.use_ema:

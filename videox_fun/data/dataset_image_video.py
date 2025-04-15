@@ -23,6 +23,21 @@ from contextlib import contextmanager
 VIDEO_READER_TIMEOUT = 20
 
 def get_random_mask(shape, image_start_only=False):
+    '''
+    为视频帧或图像生成一个随机遮挡掩码mask,常用于图像修复inpainting,遮挡建模
+    mask==1的地方是要遮挡的
+    mask==0的地方是保留
+    0. 随机遮挡一个大矩形块: 所有帧上遮住一个中心随机、大小随机的矩形区域。
+    1. 全部遮挡
+    2. 从某帧之后全部遮挡: 遮挡后半段帧（模拟视频中遮挡逐渐发生）。
+    3. 中间若干帧遮挡
+    4. 遮挡部分时间+空间的一个区域: 在视频的一段连续时间内遮挡一个区域。
+    5. 全随机遮挡像素: 每个像素点都有 50% 的概率被遮住，极度稀疏/随机。+
+    6. 遮挡随机帧的局部小块: 在随机的帧上遮住一个小矩形块，模拟局部遮挡。
+    7. 椭圆形遮挡（所有帧）
+    8. 圆形遮挡（所有帧）
+    9. 每一帧都有 50% 的概率被完全遮住
+    '''
     f, c, h, w = shape
     mask = torch.zeros((f, 1, h, w), dtype=torch.uint8)
 
@@ -583,15 +598,21 @@ class ImageVideoControlDataset(Dataset):
             mask = get_random_mask(pixel_values.size(), image_start_only=self.image_start_only)
             mask_pixel_values = pixel_values * (1 - mask) + torch.ones_like(pixel_values) * -1 * mask
             sample["mask_pixel_values"] = mask_pixel_values
-            sample["mask"] = mask
+            sample["mask"] = mask 
+            # 将图像按 mask 遮住，被遮住的地方设为 -1，其他保留原图
 
             clip_pixel_values = sample["pixel_values"][0].permute(1, 2, 0).contiguous()
             clip_pixel_values = (clip_pixel_values * 0.5 + 0.5) * 255
             sample["clip_pixel_values"] = clip_pixel_values
+            # 将图像格式从 [C, H, W] 转为 [H, W, C]，并从 [-1, 1] 映射回 [0, 255] 区间，供 CLIP 等模型使用
 
             ref_pixel_values = sample["pixel_values"][0].unsqueeze(0)
+            # 取第0帧，shape: [3, H, W]，加一个 batch 维度 → [1, 3, H, W]
+
             if (mask == 1).all():
                 ref_pixel_values = torch.ones_like(ref_pixel_values) * -1
+                # 如果图像被全遮盖，则参考图像设为 -1
             sample["ref_pixel_values"] = ref_pixel_values
+            # ref_pixel_values也是第一帧！
 
         return sample

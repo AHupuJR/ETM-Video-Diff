@@ -36,20 +36,26 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --random_hw_adapt \
   --training_with_video_token_length \
   --uniform_sampling \
-  --low_vram \
   --train_mode="control_object" \
   --trainable_modules "."\
   --enable_inpaint \
-  --inpaint_image_start_only
+  --inpaint_image_start_only \
+  # --fixed_prompt='./fixed_prompt/fixed_high_quality_prompt.pt' \
 
-
+## ref_pixel_values作为第一帧参考frame
+## --inpaint_image_start_only控制mask设定为第一帧保留其他mask掉，但是实际没有使用
 
 ### ommited #####
   # --enable_bucket \
   # --control_ref_image="first_frame" \
+  # --low_vram \
 
 
 
+
+
+
+# 只有开了enable_bucket才能用enable_text_encoder_in_dataloader
 
 # accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \  # 使用 Accelerate 启动脚本，启用 bfloat16 混合精度训练
 #   --config_path="config/wan2.1/wan_civitai.yaml" \                 # 模型和训练配置文件

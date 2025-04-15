@@ -655,6 +655,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         # buffers (don't use register_buffer otherwise dtype will be changed in to())
         assert (dim % num_heads) == 0 and (dim // num_heads) % 2 == 0
         d = dim // num_heads
+        # 这是用于高效注意力计算的 RoPE（Rotary Positional Embedding）参数。它将位置编码融合到注意力计算中，提升长序列处理能力。
         self.freqs = torch.cat(
             [
                 rope_params(1024, d - 4 * (d // 6)),
@@ -680,11 +681,20 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         num_skip_start_steps: int = 0,
         offload: bool = True
     ):
+        '''
+        启用一个叫做 TeaCache 的机制，用于缓存推理过程中的特征（很可能是为加速 diffusion 重复步骤或者做蒸馏/增强训练）。
+        可能场景：教师网络缓存特征以便学生网络使用，或缓存中间层减少计算负担。
+        '''
         self.teacache = TeaCache(
             coefficients, num_steps, rel_l1_thresh=rel_l1_thresh, num_skip_start_steps=num_skip_start_steps, offload=offload
         )
 
     def _set_gradient_checkpointing(self, module, value=False):
+        '''
+        用于启用/关闭 gradient checkpointing 功能。
+        这是 PyTorch 的一个内存优化技巧：
+        在前向传播时不保留中间激活，反向传播时再重新计算中间层，从而减少显存使用。
+        '''
         self.gradient_checkpointing = value
 
     def enable_multi_gpus_inference(self,):
@@ -696,12 +706,12 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         
     def forward(
         self,
-        x,
-        t,
-        context,
-        seq_len,
-        clip_fea=None,
-        y=None,
+        x, # (2, 16, 6, 32, 32) [B, C_in, F, H, W]
+        t, # B,
+        context, # [(78,4096),(78,4096)]
+        seq_len, # 1536
+        clip_fea=None, # (2, 257, 1280)
+        y=None, # (2, 32, 6, 32, 32) [B, 2C_in, F, H, W] because cat(control_latents, ref_latents)
         cond_flag=True,
     ):
         r"""
@@ -710,9 +720,10 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         Args:
             x (List[Tensor]):
                 List of input video tensors, each with shape [C_in, F, H, W]
+            x Tensor: B, C, F, H, W
             t (Tensor):
                 Diffusion timesteps tensor of shape [B]
-            context (List[Tensor]):
+            context (List[Tensor]): len=B
                 List of text embeddings each with shape [L, C]
             seq_len (`int`):
                 Maximum sequence length for positional encoding
@@ -727,7 +738,6 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
-        # import pdb; pdb.set_trace()
         if self.model_type == 'i2v':
             assert clip_fea is not None and y is not None
         # params
@@ -735,29 +745,39 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         dtype = x.dtype
         if self.freqs.device != device and torch.device(type="meta") != device:
             self.freqs = self.freqs.to(device)
-
-        if y is not None:
+        
+        if y is not None:  # 在c维度上cat
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
+            # len(x) = 2, x[0].shape: [3C_in, F, H, W]
 
-        # embeddings
+        # embeddings, conv3D转化为patch token
         x = [self.patch_embedding(u.unsqueeze(0)) for u in x]
+        # len(x) = 2, x[0].shape: [1, self.dim, F, H/pathsize, W/pathsize], 1,1536, 6, 16, 16
+
         grid_sizes = torch.stack(
             [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
+        # 记录每个 patch 网格的空间大小，用于最后 unpatchify
+
         x = [u.flatten(2).transpose(1, 2) for u in x]
+        # 把每个 patch flatten 成 sequence（B, L, dim), L = F*H/pathsize*W/pathsize
+
         seq_lens = torch.tensor([u.size(1) for u in x], dtype=torch.long)
         if self.sp_world_size > 1:
             seq_len = int(math.ceil(seq_len / self.sp_world_size)) * self.sp_world_size
         assert seq_lens.max() <= seq_len
+        #计算每个输入序列长度，确保最大长度不超过配置的 seq_len（分布式时可能需要对齐）
+
         x = torch.cat([
             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
                       dim=1) for u in x
-        ])
+        ]) # 对所有样本用 0 padding 补到 seq_len，以便批处理
+        # x: B, L, dim; [2, 1536, 1536]
 
-        # time embeddings
+        # time embeddings 时间编码
         with amp.autocast(dtype=torch.float32):
             e = self.time_embedding(
-                sinusoidal_embedding_1d(self.freq_dim, t).float())
-            e0 = self.time_projection(e).unflatten(1, (6, self.dim))
+                sinusoidal_embedding_1d(self.freq_dim, t).float()) # B, dim
+            e0 = self.time_projection(e).unflatten(1, (6, self.dim)) # B, 6, dim
             assert e.dtype == torch.float32 and e0.dtype == torch.float32
             # to bfloat16 for saving memeory
             e0 = e0.to(dtype)
@@ -765,16 +785,19 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
 
         # context
         context_lens = None
-        context = self.text_embedding(
+        context = self.text_embedding( # B, text_len=512, dim
             torch.stack([
                 torch.cat(
                     [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                 for u in context
             ]))
+        # 每个文本编码补成 text_len 长度（padding），再过 text embedding 层
 
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
-            context = torch.concat([context_clip, context], dim=1)
+            context = torch.concat([context_clip, context], dim=1) # bs, 769, dim
+        # 如果传入了 CLIP 图像特征，则将其映射后与文本 context 拼接，作为 复合条件信息。
+
 
         # Context Parallel
         if self.sp_world_size > 1:
@@ -854,7 +877,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         else:
             for block in self.blocks:
                 if self.training and self.gradient_checkpointing:
-
+                    # 使用 Gradient checkpointing
                     def create_custom_forward(module):
                         def custom_forward(*inputs):
                             return module(*inputs)
@@ -873,7 +896,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                         dtype,
                         **ckpt_kwargs,
                     )
-                else:
+                else: # 不使用 Gradient checkpointing
                     # arguments
                     kwargs = dict(
                         e=e0,
@@ -886,6 +909,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
                     )
                     x = block(x, **kwargs)
 
+        # 如果启用了 sequence parallelism（多 GPU 平行处理序列），则在最后把每个 GPU 的 x 在序列维度拼回完整。
         if self.sp_world_size > 1:
             x = get_sp_group().all_gather(x, dim=1)
 
@@ -895,6 +919,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         # unpatchify
         x = self.unpatchify(x, grid_sizes)
         x = torch.stack(x)
+        # B, C_in, F, H, W; [2, 16, 6, 32, 32]
         return x
 
 
