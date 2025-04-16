@@ -68,7 +68,7 @@ from videox_fun.data.bucket_sampler import (ASPECT_RATIO_512,
                                            ASPECT_RATIO_RANDOM_CROP_PROB,
                                            AspectRatioBatchImageVideoSampler,
                                            RandomSampler, get_closest_ratio)
-from videox_fun.data.dataset_image_video import (ImageVideoControlDataset,
+from videox_fun.data.dataset_event_video import (ImageEventControlDataset,
                                                 ImageVideoSampler,
                                                 get_random_mask)
 from videox_fun.models import (AutoencoderKLWan, CLIPModel, WanT5EncoderModel,
@@ -689,6 +689,27 @@ def parse_args():
         default=None, # './fixed_prompt/fixed_high_quality_prompt.pt'
         help="Path to the fixed promt for training",
     )
+    parser.add_argument(
+        "--dataset_root",
+        type=str,
+        default="/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
+        help="Path to the main dataset root containing multiple subfolders."
+    )
+    parser.add_argument(
+        "--shift_mode",
+        type=str,
+        default="in_the_middle",
+        choices=["begin_of_frame", "in_the_middle", "end_of_frame"],
+        help="Where to align the earliest event in the bins."
+    )
+    parser.add_argument(
+        "--voxel_channel_mode",
+        type=str,
+        default="repeat",
+        choices=["repeat", "triple_bins"],
+        help="How to convert voxel bins to 3 channels: "
+             "'repeat' (replicate single channel) or 'triple_bins' (3x bins)."
+    )
 
 
 
@@ -1058,12 +1079,24 @@ def main():
     sample_n_frames_bucket_interval = vae.config.temporal_compression_ratio
     
     # Get the dataset
-    train_dataset = ImageVideoControlDataset(
-        args.train_data_meta, args.train_data_dir,
-        video_sample_size=args.video_sample_size, video_sample_stride=args.video_sample_stride, video_sample_n_frames=args.video_sample_n_frames, 
-        video_repeat=args.video_repeat, 
-        image_sample_size=args.image_sample_size,
-        enable_bucket=args.enable_bucket, enable_inpaint=args.enable_inpaint,inpaint_image_start_only = args.inpaint_image_start_only
+    #train_dataset = ImageEventControlDataset(
+    #    args.train_data_meta, args.train_data_dir,
+    #    video_sample_size=args.video_sample_size, video_sample_stride=args.video_sample_stride, video_sample_n_frames=args.video_sample_n_frames, 
+    #    video_repeat=args.video_repeat, 
+    #    image_sample_size=args.image_sample_size,
+    #    enable_bucket=args.enable_bucket, enable_inpaint=args.enable_inpaint,inpaint_image_start_only = args.inpaint_image_start_only
+    #)
+
+    train_dataset = ImageEventControlDataset(
+        dataset_root=args.dataset_root,#"/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
+        frames_per_clip=args.video_sample_n_frames,
+        num_bins=args.video_sample_n_frames,
+        shift_mode=args.shift_mode,#"in_the_middle",
+        image_sample_size = args.image_sample_size,
+        video_sample_size=args.video_sample_size,
+        voxel_channel_mode= args.voxel_channel_mode, # "repeat",
+        load_rgb=True
+
     )
     
     if args.enable_bucket:
