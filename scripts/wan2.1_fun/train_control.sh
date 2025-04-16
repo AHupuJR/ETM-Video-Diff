@@ -5,6 +5,7 @@ export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
 NCCL_DEBUG=INFO
 
+
 # When train model with multi machines, use "--config_file accelerate.yaml" instead of "--mixed_precision='bf16'".
 accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --config_path="config/wan2.1/wan_civitai.yaml" \
@@ -15,7 +16,7 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --video_sample_size=256 \
   --token_sample_size=512 \
   --video_sample_stride=2 \
-  --video_sample_n_frames=81 \
+  --video_sample_n_frames=20 \
   --train_batch_size=1 \
   --video_repeat=1 \
   --gradient_accumulation_steps=1 \
@@ -35,12 +36,14 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --max_grad_norm=0.05 \
   --random_hw_adapt \
   --training_with_video_token_length \
-  --enable_bucket \
   --uniform_sampling \
   --low_vram \
-  --train_mode="control_object" \
+  --train_mode="control_object$" \
   --control_ref_image="first_frame" \
-  --trainable_modules "."
+  --trainable_modules "." \
+  --dataset_root="/work/andrea_alfarano/EventAid-dataset/EvenAid-B" \
+  --shift_mode="in_the_middle" \
+  --voxel_channel_mode="repeat"
 
 
 
