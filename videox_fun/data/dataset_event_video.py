@@ -8,6 +8,7 @@ from PIL import Image
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from concurrent.futures import ThreadPoolExecutor
+from .ETM_degradation_model import gt2etm
 
 import argparse
 from torchvision.utils import save_image
@@ -382,6 +383,7 @@ class ImageEventControlDataset(Dataset):
      - shift_mode offsets how events map into bins: 'begin_of_frame', 'in_the_middle', or 'end_of_frame'.
 
     The dataset length is the sum of #clips from all subfolders.
+
     """
 
     def __init__(
@@ -394,6 +396,7 @@ class ImageEventControlDataset(Dataset):
         video_sample_size: Union[int, Tuple[int,int]] = 512,
         voxel_channel_mode: str = "repeat",  # "repeat" or "triple_bins"
         load_rgb: bool = True,
+        use_etm_as_ref: bool = True,
     ):
         super().__init__()
         self.dataset_root = dataset_root
@@ -465,15 +468,39 @@ class ImageEventControlDataset(Dataset):
 
         # Basic image transforms
         self.image_transform = transforms.Compose([
-            transforms.Resize(min(self.image_sample_size)),
+            # transforms.Resize(min(self.image_sample_size)),
+            transforms.Resize(self.image_sample_size),# changed to the image_sample_size
             transforms.ToTensor(),
             transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
         ])
-
-        self.video_transform = transforms.Compose([
-            transforms.Resize(min(self.video_sample_size)),
-            transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
+        self.gray_transform = transforms.Compose([
+            transforms.ToTensor(),  # (H,W) or (H,W,1) -> (1,H,W)
+            transforms.Normalize([0.5], [0.5])
         ])
+
+        # self.video_transform = transforms.Compose([
+        #     transforms.Resize(min(self.video_sample_size)),
+        #     transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
+        # ])
+
+        self.use_etm_as_ref = use_etm_as_ref
+        ##### Params for GT -> ETM conversion, i.e. degradation model #####
+        # 设定参数
+        self.return_etm_gt_FLG = False
+        self.temporal_noise_FLG = True
+        self.c_mean_range = [0.15, 0.25]
+        self.c_variance = 0.005
+        self.salt_pepper_noise_FLG = True
+        self.salt_prob = 1e-5  # 0.00
+        self.pepper_prob = 0
+        self.gaussian_noise_FLG = False  # 不需要高斯噪声，不需要任何加性噪声
+        self.gaussian_mean = 0.
+        self.gaussian_var = 0.01
+        self.poisson_noise_FLG = False
+        self.poisson_level = 1000  # 100 - 400
+        self.diffraction_blur_FLG = True
+        self.diffraction_psf_size = 8  # 4-10
+
 
     def __len__(self):
         return self.cumulative_sizes[-1]
@@ -520,21 +547,19 @@ class ImageEventControlDataset(Dataset):
         max_x = int(all_events[:,1].max()) + 1
         max_y = int(all_events[:,2].max()) + 1
 
-        # build voxel
-        # We'll do a uniform time approach with num_bins = self.num_bins
-        voxel = events_to_voxel_grid(
-            events=all_events,
-            num_bins=self.num_bins,
-            width=max_x,
-            height=max_y,
-            return_format="HWC",
-            shift_mode=self.shift_mode,   # <-- pass shift_mode here
-        )  # shape => (H, W, num_bins)
-
-        # shape => (num_bins, H, W) after transpose
-        voxel = voxel.transpose((2, 0, 1))  # => (num_bins, H, W)
-
         if self.voxel_channel_mode == "repeat":
+            # build voxel
+            # We'll do a uniform time approach with num_bins = self.num_bins
+            voxel = events_to_voxel_grid(
+                events=all_events,
+                num_bins=self.num_bins,
+                width=max_x,
+                height=max_y,
+                return_format="HWC",
+                shift_mode=self.shift_mode,   # <-- pass shift_mode here
+            )  # shape => (H, W, num_bins)
+            # shape => (num_bins, H, W) after transpose
+            voxel = voxel.transpose((2, 0, 1))  # => (num_bins, H, W)
             # => (num_bins, 1, H, W)
             voxel = np.expand_dims(voxel, axis=1)
             # => (num_bins, 3, H, W)
@@ -565,8 +590,8 @@ class ImageEventControlDataset(Dataset):
                 if not os.path.isfile(full_path):
                     loaded_frames.append(None)
                     continue
-                img = Image.open(full_path).convert("RGB")
-                img_t = self.image_transform(img)
+                img = Image.open(full_path).convert("RGB") 
+                img_t = self.image_transform(img)# resize, totensor, normalize (mean 0.5 std 0.5)
                 loaded_frames.append(img_t)
         else:
             loaded_frames = frame_paths
@@ -591,7 +616,7 @@ class ImageEventControlDataset(Dataset):
         voxel_torch = F.interpolate(voxel_torch, size=(H_img, W_img), mode='bilinear', align_corners=False)
 
         # random crop
-        crop_h, crop_w = 512, 512
+        crop_h, crop_w = self.image_sample_size
         max_top  = H_img - crop_h
         max_left = W_img - crop_w
         if max_top < 0 or max_left < 0:
@@ -605,24 +630,46 @@ class ImageEventControlDataset(Dataset):
 
         # mask logic
         pixel_values = rgb_cropped  # shape => (N, 3, crop_h, crop_w)
-        mask = get_random_mask(pixel_values.shape)
-        mask_pixel_values = pixel_values * (1 - mask) + (-1.0 * mask)
+        # mask = get_random_mask(pixel_values.shape)
+        # mask_pixel_values = pixel_values * (1 - mask) + (-1.0 * mask)
 
         # maybe define clip_pixel_values as the first frame
         clip_input_frame = pixel_values[0].permute(1,2,0).contiguous()
         clip_input_frame = (clip_input_frame * 0.5 + 0.5) * 255.0
         clip_input_frame = torch.clamp(clip_input_frame, 0, 255)
+        
+        if self.use_etm_as_ref:
+            ## ref_frame, the first frame, and ETM degradation model
+            first_frame = clip_input_frame / 255.0 # 0-1
+            first_frame = first_frame.numpy()
+            
+            etm = gt2etm(first_frame, self.temporal_noise_FLG, self.c_mean_range, self.c_variance,  # temporal noise
+                    self.salt_pepper_noise_FLG, self.salt_prob, self.pepper_prob,  # salt pepper noise
+                    self.gaussian_noise_FLG, self.gaussian_mean, self.gaussian_var,  # gaussian noise
+                    poisson_noise_FLG=self.poisson_noise_FLG, poisson_level=self.poisson_level,  # poisson noise
+                    diffraction_blur_FLG=self.diffraction_blur_FLG, diffraction_psf_size=self.diffraction_psf_size,  # diffraction blur
+                    return_etm_gt_FLG=self.return_etm_gt_FLG,img_format='RGB')
+            # etm: h,w,1, float32, range 0-1
+            # totensor, normalize
+            # etm (H,W) or (H,W,1)
+            if etm.ndim == 3 and etm.shape[-1] == 1:
+                etm = etm.squeeze(-1)  # (H,W)
+            etm = self.gray_transform(etm)  # -> (1,H,W)
+            # etm_tensor: shape (1, H, W)
+            etm = etm.expand(3, -1, -1)  # -> (3, H, W)，灰度图复制成3通道
+            ref_pixel_values = etm.unsqueeze(0)  # -> (1, 3, H, W)
 
-        ref_pixel_values = pixel_values[0].unsqueeze(0)
-        first_frame_mask = mask[0].unsqueeze(0)
-        if (first_frame_mask == 1).all():
-            ref_pixel_values = torch.ones_like(ref_pixel_values)*-1
+        else:
+            ref_pixel_values = pixel_values[0].unsqueeze(0) # t, 3, h, w
+            # first_frame_mask = mask[0].unsqueeze(0)
+            # if (first_frame_mask == 1).all():
+                # ref_pixel_values = torch.ones_like(ref_pixel_values)*-1
 
         sample = {
             "control_pixel_values": voxel_cropped,   # (num_bins, 3, crop_h, crop_w)
             "pixel_values": pixel_values,            # (N, 3, crop_h, crop_w)
-            "mask": mask,
-            "mask_pixel_values": mask_pixel_values,
+            # "mask": mask,
+            # "mask_pixel_values": mask_pixel_values,
             "ref_pixel_values": ref_pixel_values,
             "clip_pixel_values": clip_input_frame,
             "text": "",
@@ -637,25 +684,26 @@ def main():
     parser.add_argument(
         "--dataset_root",
         type=str,
-        default="/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
+        default="/work/lei_sun/datasets/EventAid-R/",
+        # default="/work/lei_sun/datasets/EventAid-B/",
         help="Path to the main dataset root containing multiple subfolders."
     )
     parser.add_argument(
         "--index",
         type=int,
-        default=320,
+        default=100,
         help="Which dataset index (clip) to retrieve."
     )
     parser.add_argument(
         "--frames_per_clip",
         type=int,
-        default=24,
+        default=29,
         help="Number of frames per clip."
     )
     parser.add_argument(
         "--num_bins",
         type=int,
-        default=24,
+        default=29,
         help="Number of bins in the voxel grid (for events)."
     )
     parser.add_argument(
@@ -688,7 +736,7 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./test_dataset_in_the_middle",
+        default="./test_save/EventAid_R_in_the_middle",
         help="Directory to save frames and voxel images."
     )
     args = parser.parse_args()
@@ -713,6 +761,7 @@ def main():
     sample = dataset[args.index]
     pixel_values = sample["pixel_values"]              # shape => (N, 3, H, W)
     voxel_values = sample["control_pixel_values"]      # shape => (num_bins, 3, H, W) or None
+    ref_values = sample["ref_pixel_values"]
 
     # 3) Check for valid data
     if pixel_values is None or voxel_values is None:
@@ -727,6 +776,15 @@ def main():
         frame_img = (frame * 0.5 + 0.5).clamp(0,1)
         save_image(frame_img, os.path.join(args.output_dir, f"frame_{i}.png"))
     print(f"Saved {pixel_values.shape[0]} frames to {args.output_dir}/frame_*.png")
+
+    # 4.1) Save frames in ref_pixel_values as grayscale
+    if ref_values is not None:
+        for i in range(ref_values.shape[0]):
+            ref_frame = ref_values[i]  # (3, H, W), where the 3 channels are identical
+            ref_frame_gray = ref_frame[0]  # Take the first channel as grayscale
+            ref_frame_img = (ref_frame_gray * 0.5 + 0.5).clamp(0, 1)  # Normalize and clamp to [0,1]
+            save_image(ref_frame_img, os.path.join(args.output_dir, f"ref_frame_{i}.png"))
+        print(f"Saved {ref_values.shape[0]} reference frames to {args.output_dir}/ref_frame_*.png")
 
     # 5) Save the voxel bins
     for b in range(voxel_values.shape[0]):

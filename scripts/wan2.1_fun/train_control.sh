@@ -1,6 +1,6 @@
-export MODEL_NAME="models/Diffusion_Transformer/Wan2.1-Fun-1.3B-Control"
-export DATASET_NAME="datasets/internal_datasets/" # TODO
-export DATASET_META_NAME="datasets/internal_datasets/metadata.json" # TODO
+export MODEL_NAME="/work/lei_sun/models/Wan2.1-Fun-1.3B-Control"
+export DATASET_NAME="/work/lei_sun/datasets/EventAid_BR" # TODO
+export DATASET_META_NAME="./datasets/toy_dataset_control/json_of_toy_dataset_control.json" # TODO
 export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
 NCCL_DEBUG=INFO
@@ -12,23 +12,22 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --pretrained_model_name_or_path=$MODEL_NAME \
   --train_data_dir=$DATASET_NAME \
   --train_data_meta=$DATASET_META_NAME \
-  --image_sample_size=1024 \
-  --video_sample_size=256 \
+  --dataset_class="ImageEventControlDataset" \
+  --image_sample_size 320 640 \
   --token_sample_size=512 \
   --video_sample_stride=2 \
-  --video_sample_n_frames=20 \
-  --train_batch_size=1 \
+  --video_sample_n_frames=49 \
+  --train_batch_size=5 \
   --video_repeat=1 \
   --gradient_accumulation_steps=1 \
-  --dataloader_num_workers=8 \
+  --dataloader_num_workers=20 \
   --num_train_epochs=100 \
-  --checkpointing_steps=50 \
+  --checkpointing_steps=1000 \
   --learning_rate=2e-05 \
   --lr_scheduler="constant_with_warmup" \
   --lr_warmup_steps=100 \
   --seed=42 \
-  --output_dir="output_dir" \
-  --gradient_checkpointing \
+  --output_dir="/work/lei_sun/logs/ETM_video_diff" \
   --mixed_precision="bf16" \
   --adam_weight_decay=3e-2 \
   --adam_epsilon=1e-10 \
@@ -37,23 +36,26 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --random_hw_adapt \
   --training_with_video_token_length \
   --uniform_sampling \
-  --low_vram \
-  --train_mode="control_object$" \
-  --control_ref_image="first_frame" \
+  --train_mode="control_object" \
   --trainable_modules "." \
-  --dataset_root="/work/andrea_alfarano/EventAid-dataset/EvenAid-B" \
+  --enable_inpaint \
+  --inpaint_image_start_only \
+  --fixed_prompt='./fixed_prompt/fixed_high_quality_prompt.pt' \
   --shift_mode="in_the_middle" \
-  --voxel_channel_mode="repeat"
+  --voxel_channel_mode="triple_bins" \
+  --use_deepspeed \
+  --gradient_checkpointing
+
+### ommited #####
+  # --enable_bucket \
+  # --control_ref_image="first_frame" \
+  # --low_vram \
+  # --gradient_checkpointing \
 
 
 
 
-### Questions #####
-# vae_mini_batch == train_batch_size?
-# 是否要使用scale_lr
-
-
-
+# 只有开了enable_bucket才能用enable_text_encoder_in_dataloader
 
 # accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \  # 使用 Accelerate 启动脚本，启用 bfloat16 混合精度训练
 #   --config_path="config/wan2.1/wan_civitai.yaml" \                 # 模型和训练配置文件

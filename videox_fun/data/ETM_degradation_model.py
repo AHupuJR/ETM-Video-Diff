@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 import numpy as np
-from poisson_noise import random_add_poisson_noise_pt  # 确保正确导入
+from .poisson_noise import random_add_poisson_noise_pt  # 确保正确导入
 import numpy as np
 import cv2
 import scipy.special
@@ -9,7 +9,7 @@ from scipy.signal import convolve2d
 
 
 def airy_disk_psf(size=21, wavelength=550e-9, aperture_diameter=2e-3, pixel_size=1.12e-6):
-    """生成基于艾里斑（Airy Disk）的 PSF"""
+    """生成基于艾里斑(Airy Disk)的 PSF"""
     x = np.linspace(-size//2, size//2, size) * pixel_size
     y = np.linspace(-size//2, size//2, size) * pixel_size
     X, Y = np.meshgrid(x, y)

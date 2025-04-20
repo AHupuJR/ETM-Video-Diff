@@ -68,6 +68,7 @@ from videox_fun.data.bucket_sampler import (ASPECT_RATIO_512,
                                            ASPECT_RATIO_RANDOM_CROP_PROB,
                                            AspectRatioBatchImageVideoSampler,
                                            RandomSampler, get_closest_ratio)
+from videox_fun.data.dataset_image_video import ImageVideoControlDataset
 from videox_fun.data.dataset_event_video import (ImageEventControlDataset,
                                                 ImageVideoSampler,
                                                 get_random_mask)
@@ -553,8 +554,9 @@ def parse_args():
     parser.add_argument(
         "--image_sample_size",
         type=int,
-        default=512,
-        help="Sample size of the video.",
+        nargs='*',
+        default=[512],
+        help="Single int for square resize or two ints for (H, W). Example: --image_sample_size 320 640",
     )
     parser.add_argument(
         "--video_sample_stride",
@@ -689,12 +691,12 @@ def parse_args():
         default=None, # './fixed_prompt/fixed_high_quality_prompt.pt'
         help="Path to the fixed promt for training",
     )
-    parser.add_argument(
-        "--dataset_root",
-        type=str,
-        default="/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
-        help="Path to the main dataset root containing multiple subfolders."
-    )
+    # parser.add_argument(
+    #     "--dataset_root",
+    #     type=str,
+    #     default="/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
+    #     help="Path to the main dataset root containing multiple subfolders."
+    # )
     parser.add_argument(
         "--shift_mode",
         type=str,
@@ -710,6 +712,15 @@ def parse_args():
         help="How to convert voxel bins to 3 channels: "
              "'repeat' (replicate single channel) or 'triple_bins' (3x bins)."
     )
+    parser.add_argument(
+        "--dataset_class",
+        type=str,
+        default="ImageVideoControlDataset",
+        choices=["ImageVideoControlDataset", "ImageEventControlDataset"],
+        help="The Dataset class"
+    )
+
+
 
 
 
@@ -731,6 +742,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if len(args.image_sample_size) == 1:
+        image_sample_size = (args.image_sample_size[0], args.image_sample_size[0])
+    elif len(args.image_sample_size) == 2:
+        image_sample_size = tuple(args.image_sample_size)
+    else:
+        raise ValueError("image_sample_size must be 1 or 2 integers.")
 
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
@@ -1079,26 +1096,29 @@ def main():
     sample_n_frames_bucket_interval = vae.config.temporal_compression_ratio
     
     # Get the dataset
-    #train_dataset = ImageEventControlDataset(
-    #    args.train_data_meta, args.train_data_dir,
-    #    video_sample_size=args.video_sample_size, video_sample_stride=args.video_sample_stride, video_sample_n_frames=args.video_sample_n_frames, 
-    #    video_repeat=args.video_repeat, 
-    #    image_sample_size=args.image_sample_size,
-    #    enable_bucket=args.enable_bucket, enable_inpaint=args.enable_inpaint,inpaint_image_start_only = args.inpaint_image_start_only
-    #)
+    if args.dataset_class == 'ImageVideoControlDataset':
+        train_dataset = ImageVideoControlDataset(
+            args.train_data_meta, args.train_data_dir,
+            video_sample_size=args.video_sample_size, video_sample_stride=args.video_sample_stride, video_sample_n_frames=args.video_sample_n_frames, 
+            video_repeat=args.video_repeat, 
+            image_sample_size=args.image_sample_size,
+            enable_bucket=args.enable_bucket, enable_inpaint=args.enable_inpaint,inpaint_image_start_only = args.inpaint_image_start_only)
 
-    train_dataset = ImageEventControlDataset(
-        dataset_root=args.dataset_root,#"/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
-        frames_per_clip=args.video_sample_n_frames,
-        num_bins=args.video_sample_n_frames,
-        shift_mode=args.shift_mode,#"in_the_middle",
-        image_sample_size = args.image_sample_size,
-        video_sample_size=args.video_sample_size,
-        voxel_channel_mode= args.voxel_channel_mode, # "repeat",
-        load_rgb=True
-
-    )
+    elif args.dataset_class == 'ImageEventControlDataset':
+        train_dataset = ImageEventControlDataset(
+            dataset_root=args.train_data_dir,#"/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
+            frames_per_clip=args.video_sample_n_frames,
+            num_bins=args.video_sample_n_frames,
+            shift_mode=args.shift_mode,#"in_the_middle",
+            image_sample_size = args.image_sample_size,
+            video_sample_size=args.video_sample_size,
+            voxel_channel_mode= args.voxel_channel_mode, # "repeat",
+            load_rgb=True
+        )
+    else:
+        raise ValueError(f"Unsupported dataset class: {args.dataset_class}")
     
+
     if args.enable_bucket:
         aspect_ratio_sample_size = {key : [x / 512 * args.video_sample_size for x in ASPECT_RATIO_512[key]] for key in ASPECT_RATIO_512.keys()}
         batch_sampler_generator = torch.Generator().manual_seed(args.seed)
@@ -1352,6 +1372,11 @@ def main():
         tracker_config.pop("validation_prompts")
         tracker_config.pop("trainable_modules")
         tracker_config.pop("trainable_modules_low_learning_rate")
+        # before accelerator.init_trackers(...)
+        tracker_config = {
+            k: v for k, v in vars(args).items()
+            if isinstance(v, (int, float, str, bool, torch.Tensor))
+        }
         accelerator.init_trackers(args.tracker_project_name, tracker_config)
 
     # Function for unwrapping if model was compiled with `torch.compile`.
