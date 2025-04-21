@@ -1,9 +1,10 @@
 export MODEL_NAME="/work/lei_sun/models/Wan2.1-Fun-1.3B-Control"
-export DATASET_NAME="./datasets/toy_dataset_control/" # TODO
+export DATASET_NAME="/work/lei_sun/datasets/EventAid-R" # TODO
 export DATASET_META_NAME="./datasets/toy_dataset_control/json_of_toy_dataset_control.json" # TODO
 export NCCL_IB_DISABLE=1
 export NCCL_P2P_DISABLE=1
 NCCL_DEBUG=INFO
+
 
 # When train model with multi machines, use "--config_file accelerate.yaml" instead of "--mixed_precision='bf16'".
 accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
@@ -11,23 +12,23 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --pretrained_model_name_or_path=$MODEL_NAME \
   --train_data_dir=$DATASET_NAME \
   --train_data_meta=$DATASET_META_NAME \
-  --image_sample_size=640 \
-  --video_sample_size=256 \
+  --dataset_class="ImageVoxelControlDataset" \
+  --image_sample_size 320 640 \
   --token_sample_size=512 \
   --video_sample_stride=2 \
-  --video_sample_n_frames=81 \
-  --train_batch_size=1 \
+  --video_sample_n_frames=49 \
+  --train_batch_size=10 \
   --video_repeat=1 \
   --gradient_accumulation_steps=1 \
-  --dataloader_num_workers=8 \
-  --num_train_epochs=10000 \
-  --checkpointing_steps=50 \
+  --dataloader_num_workers=20 \
+  --num_train_epochs=100 \
+  --checkpointing_steps=1000 \
   --learning_rate=2e-05 \
   --lr_scheduler="constant_with_warmup" \
   --lr_warmup_steps=100 \
   --seed=42 \
-  --output_dir="output_dir" \
-  --gradient_checkpointing \
+  --output_dir="/work/lei_sun/logs/ETM_video_diff" \
+  --sanity_check_dir='./' \
   --mixed_precision="bf16" \
   --adam_weight_decay=3e-2 \
   --adam_epsilon=1e-10 \
@@ -37,20 +38,18 @@ accelerate launch --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --training_with_video_token_length \
   --uniform_sampling \
   --train_mode="control_object" \
-  --trainable_modules "."\
+  --trainable_modules "." \
   --enable_inpaint \
   --inpaint_image_start_only \
   --fixed_prompt='./fixed_prompt/fixed_high_quality_prompt.pt' \
-
-## ref_pixel_values作为第一帧参考frame
-## --inpaint_image_start_only控制mask设定为第一帧保留其他mask掉，但是实际没有使用
+  --use_deepspeed \
+  --gradient_checkpointing
 
 ### ommited #####
   # --enable_bucket \
   # --control_ref_image="first_frame" \
   # --low_vram \
-
-
+  # --gradient_checkpointing \
 
 
 

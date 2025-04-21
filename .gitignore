@@ -14,6 +14,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 scripts_demo*
+sanity_check/
 
 # C extensions
 *.so

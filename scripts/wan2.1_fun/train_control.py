@@ -69,9 +69,8 @@ from videox_fun.data.bucket_sampler import (ASPECT_RATIO_512,
                                            AspectRatioBatchImageVideoSampler,
                                            RandomSampler, get_closest_ratio)
 from videox_fun.data.dataset_image_video import ImageVideoControlDataset
-from videox_fun.data.dataset_event_video import (ImageEventControlDataset,
-                                                ImageVideoSampler,
-                                                get_random_mask)
+from videox_fun.data.dataset_event_video import ImageEventControlDataset, ImageVideoSampler
+from videox_fun.data.dataset_voxel_video import ImageVoxelControlDataset
 from videox_fun.models import (AutoencoderKLWan, CLIPModel, WanT5EncoderModel,
                               WanTransformer3DModel)
 from videox_fun.pipeline import WanFunControlPipeline, WanFunInpaintPipeline
@@ -296,8 +295,14 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="sd-model-finetuned",
+        default="default_output_dir",
         help="The output directory where the model predictions and checkpoints will be written.",
+    )
+    parser.add_argument(
+        "--sanity_check_dir",
+        type=str,
+        default="./",
+        help="The output directory where the sanity checking images are.",
     )
     parser.add_argument(
         "--cache_dir",
@@ -716,7 +721,7 @@ def parse_args():
         "--dataset_class",
         type=str,
         default="ImageVideoControlDataset",
-        choices=["ImageVideoControlDataset", "ImageEventControlDataset"],
+        choices=["ImageVideoControlDataset", "ImageEventControlDataset", "ImageVoxelControlDataset"],
         help="The Dataset class"
     )
 
@@ -1115,6 +1120,14 @@ def main():
             voxel_channel_mode= args.voxel_channel_mode, # "repeat",
             load_rgb=True
         )
+    elif args.dataset_class == 'ImageVoxelControlDataset':
+        train_dataset = ImageVoxelControlDataset(
+            dataset_root=args.train_data_dir,#"/work/andrea_alfarano/EventAid-dataset/EvenAid-B",
+            frames_per_clip=args.video_sample_n_frames,
+            image_sample_size = args.image_sample_size,
+            load_rgb=True
+        )
+        
     else:
         raise ValueError(f"Unsupported dataset class: {args.dataset_class}")
     
@@ -1328,6 +1341,12 @@ def main():
             persistent_workers=True if args.dataloader_num_workers != 0 else False,
             num_workers=args.dataloader_num_workers,
         )
+        # train_dataloader = torch.utils.data.DataLoader(
+        #     train_dataset,
+        #     persistent_workers=True if args.dataloader_num_workers != 0 else False,
+        #     num_workers=args.dataloader_num_workers,
+        # )
+
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -1461,13 +1480,13 @@ def main():
                 control_pixel_values = batch["control_pixel_values"].cpu()
                 pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
                 control_pixel_values = rearrange(control_pixel_values, "b f c h w -> b c f h w")
-                os.makedirs(os.path.join(args.output_dir, "sanity_check"), exist_ok=True)
+                os.makedirs(os.path.join(args.sanity_check_dir, "sanity_check"), exist_ok=True)
                 for idx, (pixel_value, control_pixel_value, text) in enumerate(zip(pixel_values, control_pixel_values, texts)):
                     pixel_value = pixel_value[None, ...]
                     control_pixel_value = control_pixel_value[None, ...]
                     gif_name = '-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_step}-{idx}'
-                    save_videos_grid(pixel_value, f"{args.output_dir}/sanity_check/{gif_name[:10]}.gif", rescale=True)
-                    save_videos_grid(control_pixel_value, f"{args.output_dir}/sanity_check/{gif_name[:10]}_control.gif", rescale=True)
+                    save_videos_grid(pixel_value, f"{args.sanity_check_dir}/sanity_check/{gif_name[:10]}.gif", rescale=True)
+                    save_videos_grid(control_pixel_value, f"{args.sanity_check_dir}/sanity_check/{gif_name[:10]}_control.gif", rescale=True)
                     
                 if args.train_mode != "control": # control mode 没有ref_image
                     ref_pixel_values = batch["ref_pixel_values"].cpu()

@@ -59,6 +59,7 @@ class ImageVideoSampler(BatchSampler):
             elif len(self.bucket['image']) == self.batch_size:
                 bucket = self.bucket['image']
                 yield bucket[:]
+                del bucket[:]
 
 
 # ---------------------------------------
@@ -633,14 +634,10 @@ class ImageEventControlDataset(Dataset):
         # mask = get_random_mask(pixel_values.shape)
         # mask_pixel_values = pixel_values * (1 - mask) + (-1.0 * mask)
 
-        # maybe define clip_pixel_values as the first frame
-        clip_input_frame = pixel_values[0].permute(1,2,0).contiguous()
-        clip_input_frame = (clip_input_frame * 0.5 + 0.5) * 255.0
-        clip_input_frame = torch.clamp(clip_input_frame, 0, 255)
-        
         if self.use_etm_as_ref:
-            ## ref_frame, the first frame, and ETM degradation model
-            first_frame = clip_input_frame / 255.0 # 0-1
+            first_frame = pixel_values[0].permute(1,2,0).contiguous()
+            first_frame = (first_frame * 0.5 + 0.5)
+            first_frame = torch.clamp(first_frame, 0, 1) # 0-1
             first_frame = first_frame.numpy()
             
             etm = gt2etm(first_frame, self.temporal_noise_FLG, self.c_mean_range, self.c_variance,  # temporal noise
@@ -664,6 +661,11 @@ class ImageEventControlDataset(Dataset):
             # first_frame_mask = mask[0].unsqueeze(0)
             # if (first_frame_mask == 1).all():
                 # ref_pixel_values = torch.ones_like(ref_pixel_values)*-1
+
+        # maybe define clip_pixel_values as the first frame, ref_pixel_values: 1,c,h,w, range 0-1
+        clip_input_frame = ref_pixel_values[0].permute(1,2,0).contiguous() # h,w,c
+        clip_input_frame = (clip_input_frame * 0.5 + 0.5) * 255.0
+        clip_input_frame = torch.clamp(clip_input_frame, 0, 255)
 
         sample = {
             "control_pixel_values": voxel_cropped,   # (num_bins, 3, crop_h, crop_w)

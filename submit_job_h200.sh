@@ -1,28 +1,23 @@
 #!/bin/bash
-#SBATCH --job-name=whole-FT
+#SBATCH --job-name=VoxelDataset
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus=h200:2
-#SBATCH --cpus-per-task=32
-#SBATCH --mem-per-cpu=20000 
+#SBATCH --cpus-per-task=36
+#SBATCH --mem-per-cpu=16000 
 #SBATCH --output=/home/lei_sun/projects/evdiff/ETM-Video-Diff/slurm_out/%x_%j.out
 #SBATCH --error=/home/lei_sun/projects/evdiff/ETM-Video-Diff/slurm_out/%x_%j.err
-#SBATCH --time=48:00:00         # Job timeout
+#SBATCH --time=96:00:00         # Job timeout
 
 eval "$(micromamba shell hook --shell bash)"
 micromamba activate evdiff
 cd /home/lei_sun/projects/evdiff/ETM-Video-Diff
 
-
-
-
-
-
 export MODEL_NAME="/work/lei_sun/models/Wan2.1-Fun-1.3B-Control"
-export DATASET_NAME="/work/lei_sun/datasets/EventAid_BR" # TODO
+export DATASET_NAME="/work/lei_sun/datasets/EventAid-R" # TODO
 export DATASET_META_NAME="./datasets/toy_dataset_control/json_of_toy_dataset_control.json" # TODO
 export NCCL_IB_DISABLE=1
-# export NCCL_P2P_DISABLE=1
+export NCCL_P2P_DISABLE=1
 NCCL_DEBUG=INFO
 
 
@@ -36,7 +31,7 @@ export NCCL_TIMEOUT=1800  # 提高到 30 分钟
 
 
 # When train model with multi machines, use "--config_file accelerate.yaml" instead of "--mixed_precision='bf16'".
-accelerate launch   --main_process_port=29501 --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
+accelerate launch   --main_process_port=29505 --mixed_precision="bf16" scripts/wan2.1_fun/train_control.py \
   --config_path="config/wan2.1/wan_civitai.yaml" \
   --pretrained_model_name_or_path=$MODEL_NAME \
   --train_data_dir=$DATASET_NAME \
@@ -70,8 +65,6 @@ accelerate launch   --main_process_port=29501 --mixed_precision="bf16" scripts/w
   --enable_inpaint \
   --inpaint_image_start_only \
   --fixed_prompt='./fixed_prompt/fixed_high_quality_prompt.pt' \
-  --shift_mode="in_the_middle" \
-  --voxel_channel_mode="triple_bins" \
   --use_deepspeed \
   --gradient_checkpointing
 

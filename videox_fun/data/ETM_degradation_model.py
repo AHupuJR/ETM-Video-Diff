@@ -1,11 +1,6 @@
 import numpy as np
 import cv2
-import numpy as np
-from .poisson_noise import random_add_poisson_noise_pt  # 确保正确导入
-import numpy as np
-import cv2
 import scipy.special
-from scipy.signal import convolve2d
 
 
 def airy_disk_psf(size=21, wavelength=550e-9, aperture_diameter=2e-3, pixel_size=1.12e-6):
@@ -155,23 +150,25 @@ def temporal_noise(img, c_mean_range=[0.15,0.25], c_variance=0.01):
     noised_img = np.clip(noised_img, 0, 1)
 
     return noised_img
+import numpy as np
+import random
 
-def gt2etm(img, temporal_noise_FLG=True, c_mean_range=[0.15,0.25], c_variance=0.01, 
-           salt_pepper_noise_FLG = True, salt_prob=0.000001, pepper_prob=0., 
-           gaussian_noise_FLG = True, gaussian_mean=0., gaussian_var=0.01, 
-           poisson_noise_FLG=True, poisson_level=1.0,
-           diffraction_blur_FLG=True, diffraction_psf_size=21,
+def gt2etm(img, temporal_noise_FLG=True, c_mean_range=[0.15, 0.25], c_variance=0.01, 
+           salt_pepper_noise_FLG=True, salt_prob=0.000001, pepper_prob=0., 
+           gaussian_noise_FLG=True, gaussian_mean=0., gaussian_var=0.01, 
+           poisson_noise_FLG=True, poisson_level=[1.0],
+           diffraction_blur_FLG=True, diffraction_psf_size=[21],
            return_etm_gt_FLG=False, img_format='BGR'):
     """
     img: h,w,c, c=3, range 0-1, BGR
     return: etm: h,w,1, float32, range 0-1
     """
-    
-    # convert to gray img
+
+    # Convert to gray img
     if img_format == 'BGR':
-        gray = 0.299 * img[..., 2] + 0.587 * img[..., 1] + 0.114 * img[..., 0]  
+        gray = 0.299 * img[..., 2] + 0.587 * img[..., 1] + 0.114 * img[..., 0]
     elif img_format == 'RGB':
-        gray = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2] 
+        gray = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]
     elif img_format == 'GRAY' and img.ndim == 2:
         gray = img
     elif img_format == 'GRAY' and img.ndim == 3:
@@ -182,37 +179,31 @@ def gt2etm(img, temporal_noise_FLG=True, c_mean_range=[0.15,0.25], c_variance=0.
     if return_etm_gt_FLG:
         etm_gt = gray
         etm_gt = etm_gt[:, :, np.newaxis]
-    
-    ## Diffraction Blur
+
+    # Diffraction Blur
     if diffraction_blur_FLG:
-        psf = airy_disk_psf(size=diffraction_psf_size)
+        psf_size = random.choice(diffraction_psf_size) if isinstance(diffraction_psf_size, list) else diffraction_psf_size
+        psf = airy_disk_psf(size=psf_size)
         gray = apply_diffraction_blur(gray, psf)
-    
-    ## Temporal Noise
+
+    # Temporal Noise
     if temporal_noise_FLG:
         gray = temporal_noise(gray, c_mean_range=c_mean_range, c_variance=c_variance)
 
-    ## Salt & Pepper noise
+    # Salt & Pepper noise
     if salt_pepper_noise_FLG:
         gray = add_salt_pepper_noise(gray, salt_prob=salt_prob, pepper_prob=pepper_prob)
 
-    ## Gaussian Noise
+    # Gaussian Noise
     gray = gray.astype(np.float32)
     if gaussian_noise_FLG:
         gray = add_gaussian_noise(gray, mean=gaussian_mean, var=gaussian_var)
 
-    ## Poisson Noise（可选）
-    if poisson_noise_FLG and poisson_level > 0:
-        print(f'[DEBUG]: gray type: {gray.dtype}')
-        print(f'[DEBUG]: gray shape: {gray.shape}')
-        print(f'[DEBUG]: gray max value: {gray.max()}')
-
-        gray = add_poisson_noise(gray, poisson_level)
-        # gray = add_poisson_noise_basicsr(gray, poisson_level)
-        print(f'[DEBUG]: gray type: {gray.dtype}')
-        print(f'[DEBUG]: gray shape: {gray.shape}')
-        print(f'[DEBUG]: gray max value: {gray.max()}')
-
+    # Poisson Noise
+    if poisson_noise_FLG:
+        pl = random.choice(poisson_level) if isinstance(poisson_level, list) else poisson_level
+        if pl > 0:
+            gray = add_poisson_noise(gray, pl)
 
     # Convert to h,w,1
     gray = gray[:, :, np.newaxis]
@@ -222,7 +213,6 @@ def gt2etm(img, temporal_noise_FLG=True, c_mean_range=[0.15,0.25], c_variance=0.
         return gray, etm_gt
     else:
         return gray
-
 
 if __name__=='__main__':
 
